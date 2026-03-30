@@ -1,10 +1,14 @@
 
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+import copy
 
 
 class Task:
+    """Base class for all pet care tasks; holds shared scheduling and priority fields."""
+
     def __init__(self, task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id):
+        """Initialise a task with identity, scheduling, and recurrence metadata."""
         self._task_id = task_id
         self._title = title
         self._category = category
@@ -49,7 +53,10 @@ class Task:
 
 
 class FeedingTask(Task):
+    """Task subclass for scheduled feeding events; tracks food type, portion, and last-fed time."""
+
     def __init__(self, task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id, food_type, portion_size, diet_notes):
+        """Extend Task with feeding-specific fields: food type, portion size, and diet notes."""
         super().__init__(task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id)
         self._food_type = food_type
         self._portion_size = portion_size
@@ -67,8 +74,11 @@ class FeedingTask(Task):
 
 
 class WalkTask(Task):
+    """Task subclass for walks; tracks planned duration, distance goal, and actual elapsed time."""
+
     # FIX #4: added _start_time and _actual_duration so start/end/summary have state to work with
     def __init__(self, task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id, duration, distance_goal, location):
+        """Extend Task with walk-specific fields: duration, distance goal, location, and runtime tracking."""
         super().__init__(task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id)
         self._duration = duration
         self._distance_goal = distance_goal
@@ -101,7 +111,10 @@ class WalkTask(Task):
 
 
 class MedicationTask(Task):
+    """Task subclass for medication administration; tracks dosage, instructions, and refill date."""
+
     def __init__(self, task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id, medication_name, dosage, instructions, refill_date):
+        """Extend Task with medication-specific fields: name, dosage, instructions, and refill date."""
         super().__init__(task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id)
         self._medication_name = medication_name
         self._dosage = dosage
@@ -133,7 +146,10 @@ class MedicationTask(Task):
 
 
 class AppointmentTask(Task):
+    """Task subclass for vet or grooming appointments; tracks provider, location, and reminder time."""
+
     def __init__(self, task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id, location, provider_name, appointment_type, contact_info, reminder_time):
+        """Extend Task with appointment-specific fields: location, provider, type, contact, and reminder time."""
         super().__init__(task_id, title, category, description, due_time, priority, status, recurring, recurrence_pattern, pet_id)
         self._location = location
         self._provider_name = provider_name
@@ -157,7 +173,10 @@ class AppointmentTask(Task):
 
 
 class Pet:
+    """Represents a pet and owns its task list; serves as the per-pet source of truth."""
+
     def __init__(self, pet_id, name, species, breed, age, weight, owner_name, notes):
+        """Initialise a pet profile with identity, physical, and owner fields."""
         self._pet_id = pet_id
         self._name = name
         self._species = species
@@ -204,7 +223,10 @@ class Pet:
 
 
 class Scheduler:
+    """Owns all cross-pet task logic: sorting, filtering, conflict detection, and recurrence."""
+
     def __init__(self):
+        """Initialise the scheduler with an empty task list and today's date."""
         # FIX #2: Scheduler._tasks holds references to the same task objects that
         # live in each Pet._tasks — PetCareSystem keeps both in sync on add/remove.
         self._tasks = []
@@ -212,8 +234,9 @@ class Scheduler:
         self._current_date = date.today()
 
     def add_task(self, task):
-        """Register a task object in the scheduler's master list."""
+        """Register a task and keep the master list sorted by due time."""
         self._tasks.append(task)
+        self._tasks.sort(key=lambda t: t._due_time)
 
     def remove_task(self, task_id):
         """Drop the task with the given ID from the scheduler's master list."""
@@ -237,6 +260,176 @@ class Scheduler:
         now = datetime.now()
         return [t for t in self._tasks if t.is_overdue(now)]
 
+    # --- Sorting ---
+
+    def sort_by_time(self, tasks=None):
+        """Return a list of Task objects sorted ascending by _due_time.
+
+        Args:
+            tasks: optional list of Task objects to sort.
+                   Defaults to the full scheduler task list when omitted.
+        Returns:
+            A new sorted list; the original list is not mutated.
+        """
+        source = tasks if tasks is not None else self._tasks
+        return sorted(source, key=lambda t: t._due_time)
+
+    # --- Filtering ---
+
+    def get_tasks_by_pet(self, pet_id):
+        """Return all tasks for the given pet, in due-time order."""
+        return [t for t in self._tasks if t._pet_id == pet_id]
+
+    def get_tasks_by_status(self, status):
+        """Return all tasks whose status matches the given value."""
+        return [t for t in self._tasks if t._status == status]
+
+    def get_tasks_by_pet_and_status(self, pet_id, status):
+        """Return tasks for a specific pet filtered by status, in due-time order."""
+        return [t for t in self._tasks if t._pet_id == pet_id and t._status == status]
+
+    # --- Conflict detection ---
+
+    def detect_conflicts(self, pet_id, window_minutes=30):
+        """Return pairs of pending tasks for the given pet whose due times are
+        within *window_minutes* of each other on the same day."""
+        pet_tasks = [
+            t for t in self._tasks
+            if t._pet_id == pet_id and t._status != 'complete'
+        ]
+        conflicts = []
+        for i in range(len(pet_tasks)):
+            for j in range(i + 1, len(pet_tasks)):
+                t1, t2 = pet_tasks[i], pet_tasks[j]
+                if t1._due_time.date() != t2._due_time.date():
+                    continue
+                delta_seconds = abs((t1._due_time - t2._due_time).total_seconds())
+                if delta_seconds <= window_minutes * 60:
+                    conflicts.append((t1, t2))
+        return conflicts
+
+    def detect_all_conflicts(self, window_minutes=0):
+        """Scan every pending task pair across ALL pets for scheduling conflicts.
+
+        Unlike detect_conflicts() which checks a single pet, this method compares
+        every combination — same-pet pairs AND cross-pet pairs — so nothing is
+        missed.
+
+        Strategy (lightweight, no exceptions raised):
+          - Skip any task whose status is 'complete' — it no longer occupies a slot.
+          - Skip pairs on different calendar days — no clash possible.
+          - Compute the absolute time gap between the two due times.
+          - If that gap is within window_minutes, record the pair.
+          - window_minutes=0 (default) catches only exact same-time clashes.
+            Raise it (e.g. 15) to catch near-conflicts too.
+
+        Returns:
+            List of (Task, Task) tuples — never raises, returns [] on no conflicts.
+        """
+        pending = [t for t in self._tasks if t._status != 'complete']
+        conflicts = []
+        for i in range(len(pending)):
+            for j in range(i + 1, len(pending)):
+                t1, t2 = pending[i], pending[j]
+                if t1._due_time.date() != t2._due_time.date():
+                    continue
+                delta_seconds = abs((t1._due_time - t2._due_time).total_seconds())
+                if delta_seconds <= window_minutes * 60:
+                    conflicts.append((t1, t2))
+        return conflicts
+
+    # --- Recurring task generation ---
+
+    def generate_next_occurrence(self, task):
+        """Clone a recurring task and set its due time to the next correct occurrence.
+
+        How timedelta is used
+        ---------------------
+        timedelta(days=N) represents an exact duration of N * 86 400 seconds.
+        Adding it to a date gives the date N days in the future; adding it to a
+        datetime shifts both the date and time by the same amount.
+
+        For 'daily' and 'weekly' patterns we anchor to *today* rather than to the
+        task's original due_time.  This matters when a task is completed late:
+
+            task._due_time = yesterday 08:00   (overdue)
+            completed today
+
+            Wrong:  yesterday 08:00 + timedelta(days=1)  →  today 08:00
+                    (next occurrence is already almost due/overdue)
+
+            Right:  date.today() + timedelta(days=1)      →  tomorrow
+                    datetime.combine(tomorrow, time(8,0))  →  tomorrow 08:00
+
+        datetime.combine(date, time) stitches a calendar date and a clock time
+        into a single datetime object, letting us change the date while keeping
+        the original time-of-day intact.
+
+        'monthly' keeps the old delta-from-due_time behaviour because it is
+        excluded from auto-recurrence in complete_task() and is managed manually.
+
+        Returns a new task object with status 'pending' and task_id reset to 0
+        so PetCareSystem will assign a fresh ID via id_callback.
+        """
+        original_time = task._due_time.time()   # preserve e.g. 08:00, 13:00, 18:30
+
+        if task._recurrence_pattern == 'daily':
+            next_date = date.today() + timedelta(days=1)
+            next_due  = datetime.combine(next_date, original_time)
+        elif task._recurrence_pattern == 'weekly':
+            next_date = date.today() + timedelta(weeks=1)
+            next_due  = datetime.combine(next_date, original_time)
+        else:
+            # 'monthly' or any unknown pattern: fall back to offset from due_time
+            next_due = task._due_time + timedelta(days=30)
+
+        next_task = copy.copy(task)
+        next_task._task_id = 0          # reassigned by id_callback in complete_task
+        next_task._due_time = next_due
+        next_task._status = 'pending'
+
+        # Reset per-occurrence tracking fields
+        if hasattr(next_task, '_last_fed'):
+            next_task._last_fed = None
+        if hasattr(next_task, '_last_dose_time'):
+            next_task._last_dose_time = None
+        if hasattr(next_task, '_start_time'):
+            next_task._start_time = None
+            next_task._actual_duration = None
+
+        return next_task
+
+    def complete_task(self, task_id, id_callback=None):
+        """Mark a task complete and, for 'daily' or 'weekly' recurring tasks,
+        automatically generate and register the next occurrence.
+
+        This is the single place that owns recurrence logic for the scheduler.
+        'monthly' tasks are intentionally excluded — those are managed manually.
+
+        Args:
+            task_id:     ID of the task to mark complete.
+            id_callback: optional callable () -> int that returns the next unique
+                         task ID.  Pass PetCareSystem._next_task_id so the new
+                         task receives a proper ID before entering the list.
+                         If omitted the new task keeps id=0 (useful in tests).
+        Returns:
+            The newly created Task for the next occurrence, or None when the
+            completed task is not daily/weekly recurring.
+        """
+        for task in self._tasks:
+            if task._task_id != task_id:
+                continue
+            task.mark_complete()
+            if task._recurring and task._recurrence_pattern in ('daily', 'weekly'):
+                next_task = self.generate_next_occurrence(task)
+                if id_callback is not None:
+                    next_task._task_id = id_callback()
+                self._tasks.append(next_task)
+                self._tasks.sort(key=lambda t: t._due_time)
+                return next_task
+            return None
+        return None
+
     # FIX #5: calls task.calculate_priority() on each task and sorts; logic stays in Task
     def prioritize_tasks(self):
         """Sort all tasks by their calculated priority score (highest first) and return the list."""
@@ -250,9 +443,12 @@ class Scheduler:
 
 
 class Reminder:
+    """Represents a scheduled notification for a task; supports push, email, and SMS channels."""
+
     # FIX #1: added pet_id so reminders can be queried per-pet without traversing tasks
     # FIX #6: added channel so send() knows how to deliver (e.g. 'push', 'email', 'sms')
     def __init__(self, reminder_id, task_id, pet_id, message, reminder_time, sent_status, channel='push'):
+        """Initialise a reminder with target task, delivery channel, and scheduled send time."""
         self._reminder_id = reminder_id
         self._task_id = task_id
         self._pet_id = pet_id          # FIX #1
@@ -292,7 +488,10 @@ class Reminder:
 
 
 class PetCareSystem:
+    """Top-level facade; coordinates pets, the scheduler, and reminders through a single API."""
+
     def __init__(self):
+        """Initialise the system with empty pet and reminder lists and a fresh Scheduler."""
         self._pets = []
         self._scheduler = Scheduler()
         self._reminders = []
@@ -315,6 +514,14 @@ class PetCareSystem:
         """Return the Pet with the matching ID, or None if not found."""
         for pet in self._pets:
             if pet._pet_id == pet_id:
+                return pet
+        return None
+
+    def _find_pet_by_name(self, name):
+        """Return the Pet whose name matches (case-insensitive), or None if not found."""
+        name_lower = name.lower()
+        for pet in self._pets:
+            if pet._name.lower() == name_lower:
                 return pet
         return None
 
@@ -353,11 +560,17 @@ class PetCareSystem:
         return self._scheduler.get_daily_schedule(pet_id, target_date)
 
     def complete_task(self, task_id):
-        """Find the task by ID across all pets and mark it complete."""
-        for task in self._scheduler._tasks:
-            if task._task_id == task_id:
-                task.mark_complete()
-                return
+        """Complete a task and sync any auto-generated recurrence into Pet._tasks.
+
+        Recurrence logic lives entirely in Scheduler.complete_task(); this method
+        only handles the PetCareSystem concern of keeping Pet._tasks in sync with
+        the scheduler.
+        """
+        next_task = self._scheduler.complete_task(task_id, self._next_task_id)
+        if next_task is not None:
+            pet = self._find_pet(next_task._pet_id)
+            if pet is not None:
+                pet.add_task(next_task)
 
     def get_system_summary(self):
         """Return a dict with counts of pets, tasks, overdue items, upcoming items, and pending reminders."""
@@ -371,6 +584,82 @@ class PetCareSystem:
             'upcoming_tasks': upcoming,
             'pending_reminders': sum(1 for r in self._reminders if not r._sent_status),
         }
+
+    def get_pet_tasks_by_status(self, pet_id, status):
+        """Return all tasks for a pet filtered by status, sorted by due time."""
+        return self._scheduler.get_tasks_by_pet_and_status(pet_id, status)
+
+    def detect_pet_conflicts(self, pet_id, window_minutes=30):
+        """Return conflicting pending-task pairs for a pet within window_minutes."""
+        return self._scheduler.detect_conflicts(pet_id, window_minutes)
+
+    def get_conflict_warnings(self, window_minutes=0):
+        """Return human-readable warning strings for every scheduling conflict.
+
+        Calls Scheduler.detect_all_conflicts() for the raw pairs, then formats
+        each one into a plain string.  Same-pet and cross-pet conflicts receive
+        different labels so the owner can tell them apart at a glance.
+
+        Never raises — returns an empty list when the schedule is conflict-free.
+
+        Args:
+            window_minutes: passed through to detect_all_conflicts().
+                            0 = exact same time only (default).
+        Returns:
+            List of warning strings, one per conflicting pair.
+        """
+        pet_names = {p._pet_id: p._name for p in self._pets}
+        pairs = self._scheduler.detect_all_conflicts(window_minutes)
+        warnings = []
+        for t1, t2 in pairs:
+            time_str = t1._due_time.strftime('%I:%M %p')
+            if t1._pet_id == t2._pet_id:
+                name = pet_names.get(t1._pet_id, f'pet {t1._pet_id}')
+                warnings.append(
+                    f"WARNING [same-pet]  : '{t1._title}' and '{t2._title}'"
+                    f" — both scheduled for {name} at {time_str}"
+                )
+            else:
+                n1 = pet_names.get(t1._pet_id, f'pet {t1._pet_id}')
+                n2 = pet_names.get(t2._pet_id, f'pet {t2._pet_id}')
+                warnings.append(
+                    f"WARNING [cross-pet] : '{t1._title}' ({n1}) and"
+                    f" '{t2._title}' ({n2}) — both scheduled at {time_str}"
+                )
+        return warnings
+
+    def filter_tasks(self, status=None, pet_name=None):
+        """Return tasks filtered by completion status, pet name, or both.
+
+        Args:
+            status:   'pending', 'complete', or 'in_progress'.
+                      Pass None to skip status filtering.
+            pet_name: case-insensitive pet name string.
+                      Pass None to include tasks for all pets.
+        Returns:
+            A sorted list of matching Task objects, or an empty list when
+            pet_name is given but no matching pet exists.
+        Raises:
+            ValueError: if status is not one of the recognised values.
+        """
+        valid_statuses = {'pending', 'complete', 'in_progress'}
+        if status is not None and status not in valid_statuses:
+            raise ValueError(
+                f"Unknown status '{status}'. Expected one of: {sorted(valid_statuses)}"
+            )
+
+        tasks = list(self._scheduler._tasks)
+
+        if pet_name is not None:
+            pet = self._find_pet_by_name(pet_name)
+            if pet is None:
+                return []
+            tasks = [t for t in tasks if t._pet_id == pet._pet_id]
+
+        if status is not None:
+            tasks = [t for t in tasks if t._status == status]
+
+        return self._scheduler.sort_by_time(tasks)
 
     # FIX #7: helper that collects a pet's MedicationTasks so validate_schedule()
     # can be called with the full sibling list

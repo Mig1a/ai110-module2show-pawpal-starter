@@ -41,3 +41,34 @@ pip install -r requirements.txt
 5. Add tests to verify key behaviors.
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
+
+## Smarter Scheduling
+
+Beyond basic task storage, `pawpal_system.py` implements four scheduling features
+that make the planner genuinely useful.
+
+### 1. Time-sorted display
+`Scheduler.sort_by_time()` returns any task list sorted ascending by due time.
+Tasks can be added in any order — the schedule always renders earliest-first.
+
+### 2. Flexible task filtering
+`PetCareSystem.filter_tasks(status, pet_name)` lets the UI or terminal query tasks
+by completion status (`pending` / `complete` / `in_progress`), by pet name
+(case-insensitive), or both at once. An unknown pet name returns `[]` instead of
+raising an error.
+
+### 3. Conflict detection
+`Scheduler.detect_conflicts(pet_id, window_minutes)` flags same-pet tasks whose
+due times overlap within a configurable window.
+`Scheduler.detect_all_conflicts(window_minutes)` extends this to every task pair
+across all pets, catching cross-pet scheduling clashes too.
+`PetCareSystem.get_conflict_warnings()` formats raw conflict pairs into
+human-readable strings labelled `[same-pet]` or `[cross-pet]`.
+
+### 4. Automatic recurrence
+When a `daily` or `weekly` recurring task is completed,
+`Scheduler.generate_next_occurrence()` clones it and advances the due date by the
+correct interval — anchored to *today* rather than the original due time so late
+completions don't create near-immediate follow-ups.
+The new occurrence is automatically inserted into both the scheduler and the pet's
+task list via `PetCareSystem.complete_task()`.
