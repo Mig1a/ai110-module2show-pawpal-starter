@@ -39,7 +39,12 @@
 **a. Constraints and priorities**
 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
+
+    The scheduler considers time (due_time orders and filters every task), priority (a 1–10 score boosted +10 when overdue), status (complete tasks are excluded from conflict checks and suggestions), and recurrence pattern (daily/weekly tasks auto-regenerate after completion).
+
 - How did you decide which constraints mattered most?
+
+    Time first — without it there's no schedule. Priority second — not all tasks have equal consequences if missed. Status followed naturally from both, and recurrence was added last as a usability improvement.
 
 **b. Tradeoffs**
 
