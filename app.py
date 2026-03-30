@@ -182,9 +182,11 @@ if st.button("Generate Schedule"):
     if not system._pets:
         st.warning("No pets in the system yet.")
     else:
+        now = datetime.now()
+
         for pet in system._pets:
             tasks = system.view_pet_schedule(pet._pet_id, date.today())
-            tasks_sorted = sorted(tasks, key=lambda t: t._due_time)
+            tasks_sorted = system._scheduler.sort_by_time(tasks)
 
             st.markdown(f"#### {pet._name} — {pet._breed}")
 
@@ -192,13 +194,53 @@ if st.button("Generate Schedule"):
                 st.info("No tasks scheduled for today.")
                 continue
 
+            # --- Sortable summary table (one row per task) ---
+            table_rows = []
+            for t in tasks_sorted:
+                if t._status == "complete":
+                    status_label = "✅ Complete"
+                elif t.is_overdue(now):
+                    status_label = "🔴 Overdue"
+                else:
+                    status_label = "🕐 Pending"
+
+                recur_label = (
+                    t._recurrence_pattern.capitalize()
+                    if t._recurring and t._recurrence_pattern
+                    else "—"
+                )
+                table_rows.append({
+                    "Time":     t._due_time.strftime("%I:%M %p"),
+                    "Task":     t._title,
+                    "Type":     t._category,
+                    "Priority": t._priority,
+                    "Recurs":   recur_label,
+                    "Status":   status_label,
+                })
+            st.table(table_rows)
+
+            # --- Interactive detail cards ---
+            st.markdown("**Task Details**")
             for task in tasks_sorted:
-                status_icon = "✅" if task._status == "complete" else "🕐"
+                is_complete = task._status == "complete"
+                is_overdue  = task.is_overdue(now)
+
                 with st.container(border=True):
                     col_a, col_b = st.columns([3, 1])
                     with col_a:
-                        st.markdown(f"**{status_icon} {task._due_time.strftime('%I:%M %p')} — {task._title}**")
-                        st.caption(f"Category: {task._category} | Priority: {task._priority} | Status: {task._status}")
+                        time_label = task._due_time.strftime("%I:%M %p")
+                        if is_complete:
+                            st.success(f"✅ {time_label} — {task._title}")
+                        elif is_overdue:
+                            st.error(f"🔴 {time_label} — {task._title}  *(overdue)*")
+                        else:
+                            st.markdown(f"**🕐 {time_label} — {task._title}**")
+
+                        st.caption(
+                            f"Category: {task._category} | "
+                            f"Priority: {task._priority} | "
+                            f"Status: {task._status}"
+                        )
                         if task._description:
                             st.write(task._description)
 
@@ -206,24 +248,43 @@ if st.button("Generate Schedule"):
                         if hasattr(task, "_food_type"):
                             st.write(f"Food: {task._food_type}, {task._portion_size}")
                         if hasattr(task, "_distance_goal"):
-                            st.write(f"Goal: {task._distance_goal} mi over {task._duration} min @ {task._location}")
+                            st.write(
+                                f"Goal: {task._distance_goal} mi over "
+                                f"{task._duration} min @ {task._location}"
+                            )
                         if hasattr(task, "_medication_name"):
                             st.write(f"Medication: {task._medication_name} — {task._dosage}")
                             if task.check_refill_needed():
-                                st.warning("Refill needed!")
+                                st.warning("⚠️ Refill needed — contact your vet.")
                         if hasattr(task, "_provider_name"):
                             st.write(f"Provider: {task._provider_name} @ {task._location}")
 
                     with col_b:
-                        if task._status != "complete":
+                        if not is_complete:
                             if st.button("Mark done", key=f"done_{task._task_id}"):
                                 system.complete_task(task._task_id)
                                 st.rerun()
 
+        # --- Conflict warnings ---
         st.divider()
-        summary = system.get_system_summary()
+        warnings = system.get_conflict_warnings(window_minutes=30)
+        if warnings:
+            st.markdown("#### ⚠️ Scheduling Conflicts")
+            for msg in warnings:
+                st.warning(msg)
+        else:
+            st.success("No scheduling conflicts detected — all tasks are clear.")
+
+        # --- Summary metrics ---
+        st.divider()
+        summary  = system.get_system_summary()
+        overdue  = summary["overdue_tasks"]
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Pets",     summary["total_pets"])
         col2.metric("Tasks",    summary["total_tasks"])
-        col3.metric("Overdue",  summary["overdue_tasks"])
+        col3.metric(
+            "Overdue", overdue,
+            delta=f"{overdue} need attention" if overdue > 0 else "None",
+            delta_color="inverse",
+        )
         col4.metric("Upcoming", summary["upcoming_tasks"])

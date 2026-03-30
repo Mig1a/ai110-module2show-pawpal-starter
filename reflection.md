@@ -40,7 +40,11 @@
 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 
-    The scheduler considers time (due_time orders and filters every task), priority (a 1–10 score boosted +10 when overdue), status (complete tasks are excluded from conflict checks and suggestions), and recurrence pattern (daily/weekly tasks auto-regenerate after completion).
+    1. Time — the primary constraint. Every task has a _due_time
+    2. Priority — a numeric score (1–10) set per task.
+    3. Status — pending, in_progress, and complete act as a soft constraint.
+    4. Recurrence pattern — daily and weekly tasks automatically regenerate after completion.
+    
 
 - How did you decide which constraints mattered most?
 
@@ -63,7 +67,11 @@
 **a. How you used AI**
 
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
+
+    I used AI tools throughout the project for design brainstorming, code scaffolding, and refinement. Early on, I used AI to help identify the core objects (like Pet, Task, Scheduler) and define their responsibilities, which guided my UML and overall architecture. I also used it to generate initial class skeletons and structure the system in a clean, modular way.
 - What kinds of prompts or questions were most helpful?
+
+    During development, AI was helpful for debugging and refactoring. I asked it to review my design for potential issues, which led to improvements like centralizing ID generation, fixing task list synchronization, and clarifying responsibility between classes.
 
 **b. Judgment and verification**
 
@@ -77,12 +85,22 @@
 **a. What you tested**
 
 - What behaviors did you test?
+
+    Fourteen tests across four areas: basic task operations (`mark_complete`, `add_task`), sorting correctness (`sort_by_time` returns chronological order, handles an empty list, preserves all tasks), recurrence logic (daily task generates a next occurrence due tomorrow with the original time-of-day preserved, original is marked complete, non-recurring and monthly tasks produce no auto-occurrence), and conflict detection (same-pet overlap flagged, no false positives outside the window, cross-pet clashes caught, completed tasks excluded).
+
 - Why were these tests important?
+
+    Sorting and conflict detection are the two features users see directly in the UI — a silent sort bug or a missed conflict would immediately undermine trust. Recurrence is the most stateful logic in the system: completing one task creates another, which means a bug compounds with every completion. Testing these three behaviors together covers the paths most likely to fail quietly.
 
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
+
+    Moderately confident — roughly 3 out of 5. The core per-method logic (sort, daily recurrence, same-pet and cross-pet conflict detection) passes all 14 tests and behaves as designed. Confidence is limited because the `PetCareSystem` integration layer — which keeps `Pet._tasks` and `Scheduler._tasks` in sync — has no dedicated tests. A bug there, such as a task surviving `remove_pet` in one list but not the other, would not be caught by the current suite.
+
 - What edge cases would you test next if you had more time?
+
+    The highest-priority gaps are: (1) `remove_pet` leaves no orphaned tasks in the scheduler, (2) completing a recurring task assigns it a fresh unique ID rather than keeping `id=0`, (3) a daily task due on February 28 rolls correctly to March 1, and (4) calling `end_walk()` before `start_walk()` does not crash or produce a negative duration.
 
 ---
 
@@ -92,10 +110,16 @@
 
 - What part of this project are you most satisfied with?
 
+    The scheduling architecture. Keeping `Pet._tasks` and `Scheduler._tasks` as shared references — coordinated through `PetCareSystem` as a single guardian — meant that sorting, conflict detection, and recurrence all operated on the same objects without copying or syncing data manually. Once that pattern was in place, adding new features felt additive rather than risky, because there was one clear place to make each change.
+
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
 
+    I would replace the point-in-time conflict model with duration-aware conflict detection. Right now, a 30-minute walk and a medication dose 10 minutes later are only flagged if `window_minutes` is set to at least 10 — the system has no concept of how long a task actually takes. Adding a `_duration` field to the base `Task` class and comparing `due_time + duration` against the next task's `due_time` would catch real overlaps without requiring the user to tune a window manually. I would also add integration tests for `PetCareSystem` before extending any more features, since the sync layer is currently the largest untested surface in the system.
+
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+
+    AI is most useful when you already have a clear question. Vague prompts like "help me design a scheduler" produced broad suggestions that needed heavy filtering. Specific prompts like "what breaks if two lists hold references to the same task objects" produced precise, actionable answers. The quality of AI output is directly proportional to the clarity of the problem you hand it — which means the most important skill is still being able to define the problem yourself before asking for help.
